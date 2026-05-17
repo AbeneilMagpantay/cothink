@@ -49,6 +49,11 @@
           "type": "number",
           "default": 8765,
           "description": "Port for the local cothink HTTP server."
+        },
+        "cothink.sidecarPath": {
+          "type": "string",
+          "default": "",
+          "description": "Override path to a standalone cothink-serve(.exe) binary. Empty = auto-detect from process.resourcesPath (set by electron-builder extraResources in the cothink fork) or fall back to Python venv mode."
         }
       }
     }

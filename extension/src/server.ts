@@ -12,7 +12,8 @@ export type HealthState =
   | "stopped"
   | "unreachable"
   | "error: no python"
-  | "error: no cothink root";
+  | "error: no cothink root"
+  | "error: no sidecar";
 
 /** Owns the Python `cothink.server` subprocess: spawns it, polls /health
  *  until live, surfaces state via a status-bar indicator, and tears it
@@ -40,39 +41,59 @@ export class CothinkServer {
     }
 
     const config = vscode.workspace.getConfiguration("cothink");
-    const cothinkRoot = this.resolveCothinkRoot(config);
-    if (!cothinkRoot) {
-      this.setState("error: no cothink root");
-      vscode.window.showErrorMessage(
-        "cothink: cannot find the cothink Python project root. " +
-          "Set `cothink.cothinkRoot` in settings, or open a workspace folder containing pyproject.toml (or a /cothink subfolder containing it).",
-      );
-      return;
-    }
-
-    const pythonPath = this.resolvePythonPath(config, cothinkRoot);
-    if (!pythonPath || !fs.existsSync(pythonPath)) {
-      this.setState("error: no python");
-      vscode.window.showErrorMessage(
-        `cothink: Python executable not found. Looked at ${pythonPath || "(unset)"}. ` +
-          "Set `cothink.pythonPath`, or ensure `.venv` exists at the cothink root.",
-      );
-      return;
-    }
-
     const port = config.get<number>("serverPort", 8765);
     this.setState("starting");
 
-    this.process = cp.spawn(
-      pythonPath,
-      ["-m", "cothink.server", "--host", "127.0.0.1", "--port", String(port)],
-      {
-        cwd: cothinkRoot,
-        stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env },
-        windowsHide: true,
-      },
-    );
+    // Bundled-mode first: the cothink fork ships a standalone cothink-serve
+    // binary at process.resourcesPath via electron-builder extraResources.
+    // When that exists, prefer it over the dev-mode Python-interpreter path
+    // — no venv, no Python install, no pyproject discovery needed.
+    const sidecar = this.resolveSidecarBinary(config);
+    if (sidecar) {
+      this.process = cp.spawn(
+        sidecar,
+        ["--host", "127.0.0.1", "--port", String(port)],
+        {
+          stdio: ["ignore", "pipe", "pipe"],
+          env: { ...process.env },
+          windowsHide: true,
+        },
+      );
+    } else {
+      // Dev mode: sideload into Antigravity / vanilla VSCode against the
+      // user's local Python venv. Required when the cothink-build fork
+      // isn't packaging the binary yet (today, anything before v0.5).
+      const cothinkRoot = this.resolveCothinkRoot(config);
+      if (!cothinkRoot) {
+        this.setState("error: no cothink root");
+        vscode.window.showErrorMessage(
+          "cothink: cannot find the cothink Python project root. " +
+            "Set `cothink.cothinkRoot` in settings, or open a workspace folder containing pyproject.toml (or a /cothink subfolder containing it).",
+        );
+        return;
+      }
+
+      const pythonPath = this.resolvePythonPath(config, cothinkRoot);
+      if (!pythonPath || !fs.existsSync(pythonPath)) {
+        this.setState("error: no python");
+        vscode.window.showErrorMessage(
+          `cothink: Python executable not found. Looked at ${pythonPath || "(unset)"}. ` +
+            "Set `cothink.pythonPath`, or ensure `.venv` exists at the cothink root.",
+        );
+        return;
+      }
+
+      this.process = cp.spawn(
+        pythonPath,
+        ["-m", "cothink.server", "--host", "127.0.0.1", "--port", String(port)],
+        {
+          cwd: cothinkRoot,
+          stdio: ["ignore", "pipe", "pipe"],
+          env: { ...process.env },
+          windowsHide: true,
+        },
+      );
+    }
 
     this.process.stdout?.on("data", (chunk: Buffer) =>
       console.log("[cothink stdout]", chunk.toString().trimEnd()),
@@ -148,6 +169,25 @@ export class CothinkServer {
         this.statusBar.text = `$(error) cothink: ${state.replace("error: ", "")}`;
         break;
     }
+  }
+
+  /** Resolve the standalone cothink-serve binary if the cothink fork bundled it.
+   *  Returns undefined in dev mode (Antigravity-sideload, vanilla VSCode), causing
+   *  start() to fall back to the Python-interpreter path. */
+  private resolveSidecarBinary(config: vscode.WorkspaceConfiguration): string | undefined {
+    // Explicit override always wins (lets a dev point at a hand-built binary).
+    const configured = config.get<string>("sidecarPath", "");
+    if (configured && fs.existsSync(configured)) return configured;
+
+    // electron-builder's extraResources lands files at process.resourcesPath
+    // (e.g. <app>/resources/cothink-serve.exe in the packaged cothink app).
+    // In sideload-into-Antigravity mode, process.resourcesPath points at
+    // Antigravity's own resources dir, where cothink-serve.exe doesn't exist
+    // — so we return undefined and fall back to the Python path.
+    const ext = process.platform === "win32" ? ".exe" : "";
+    const bundled = path.join(process.resourcesPath, `cothink-serve${ext}`);
+    if (fs.existsSync(bundled)) return bundled;
+    return undefined;
   }
 
   /** Locate the cothink Python project (where pyproject.toml lives). */
