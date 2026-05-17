@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+*.egg-info/
+
+# Build artifacts (PyInstaller)
+build/
+dist/
+_pyinstaller_entry.py
+
+# VSCode extension build artifacts
+extension/node_modules/
+extension/out/
+extension/*.vsix
+
+# Go TUI build artifacts
+tui/cothink
+tui/cothink.exe
+tui/cothink-*
+
+# Per-session runtime data (not source)
+_collab/
+extension/_collab/
+
+# Local config + secrets
+.env
+*.local.json
+
+# IDE state
+.idea/
+# (.vscode/ tracked — has launch + tasks configs useful for dev)
+
+# OS
+.DS_Store
+Thumbs.db

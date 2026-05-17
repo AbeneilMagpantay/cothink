@@ -1,0 +1,66 @@
+{
+  "name": "cothink",
+  "displayName": "cothink",
+  "description": "Dual-brain orchestrator (Claude + Gemini) — IDE-class harness for cothink",
+  "version": "0.5.0",
+  "publisher": "cothink-local",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": ["AI", "Machine Learning", "Other"],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "cothink-sidebar",
+          "title": "cothink",
+          "icon": "media/cothink-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "cothink-sidebar": [
+        { "id": "cothink.workbenchView", "name": "cothink", "type": "webview" }
+      ]
+    },
+    "commands": [
+      { "command": "cothink.startServer", "title": "cothink: Start Server" },
+      { "command": "cothink.stopServer", "title": "cothink: Stop Server" },
+      { "command": "cothink.restartServer", "title": "cothink: Restart Server" }
+    ],
+    "configuration": {
+      "title": "cothink",
+      "properties": {
+        "cothink.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the Python executable in the cothink venv. Empty = auto-detect (<cothinkRoot>/.venv/Scripts/python.exe on Windows or <cothinkRoot>/.venv/bin/python on Unix)."
+        },
+        "cothink.cothinkRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the cothink Python project root (where pyproject.toml lives). Empty = auto-detect by looking for pyproject.toml in the workspace folder, or <workspaceFolder>/cothink."
+        },
+        "cothink.serverPort": {
+          "type": "number",
+          "default": 8765,
+          "description": "Port for the local cothink HTTP server."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.95.0",
+    "typescript": "^5.6.0"
+  }
+}
