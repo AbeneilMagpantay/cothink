@@ -138,6 +138,11 @@ hiddenimports += [
 # collect_submodules walks them all.
 hiddenimports += collect_submodules("PIL")
 
+# Rich: chat.py imports rich.console, rich.live, rich.markdown, rich.panel at
+# module load. Rich has lazy submodule discovery internally for its color/
+# console backends; collect_submodules walks them.
+hiddenimports += collect_submodules("rich")
+
 # Our own package — explicitly list every submodule so PyInstaller bundles
 # them all, even ones imported lazily via the FastAPI route handlers.
 hiddenimports += [
