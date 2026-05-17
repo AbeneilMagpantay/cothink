@@ -132,6 +132,12 @@ hiddenimports += [
     "filelock._unix",
 ]
 
+# Pillow: image_handler.py does `from PIL import Image` at module load (via the
+# nodes.py -> image_handler.py import chain triggered on server startup). PIL's
+# image-codec submodules (_imaging, _imagingft, etc.) are picked dynamically;
+# collect_submodules walks them all.
+hiddenimports += collect_submodules("PIL")
+
 # Our own package — explicitly list every submodule so PyInstaller bundles
 # them all, even ones imported lazily via the FastAPI route handlers.
 hiddenimports += [
@@ -166,6 +172,10 @@ datas += collect_data_files("google.genai")
 
 # claude-agent-sdk ships system prompts as package data.
 datas += collect_data_files("claude_agent_sdk")
+
+# Pillow: ships compiled imaging plugins (e.g. _imaging.pyd) alongside its
+# Python code. collect_data_files picks them up.
+datas += collect_data_files("PIL")
 
 # Package metadata (importlib.metadata.version("...") lookups happen at
 # runtime in several libraries; copy_metadata makes them work in the bundle).
