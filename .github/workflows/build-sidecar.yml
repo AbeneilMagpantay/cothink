@@ -77,9 +77,12 @@ jobs:
       - name: Smoke-test — /health endpoint
         # Launch the binary, poll /health for up to 30s, kill it. Confirms
         # the bundled binary boots, imports clean, and answers HTTP.
-        # Test runs without API keys, so endpoints needing live model calls
-        # would fail; /health only reports liveness + configured models.
+        # /health is pure module-constant lookup (no API calls), so we
+        # set a placeholder GEMINI_API_KEY to satisfy server.py's startup
+        # validation in _load_env(). Don't worry — no real API call runs.
         shell: bash
+        env:
+          GEMINI_API_KEY: dummy-ci-smoke-test-not-a-real-key
         run: |
           ./dist/${{ matrix.binary_name }} --host 127.0.0.1 --port 8765 &
           SERVER_PID=$!
