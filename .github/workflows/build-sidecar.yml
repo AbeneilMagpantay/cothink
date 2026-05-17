@@ -1,0 +1,106 @@
+name: Build cothink-serve sidecar
+
+# Runs PyInstaller across Windows/Linux/macOS to produce a single-file
+# `cothink-serve(.exe)` binary that the cothink-build fork can inject into
+# its Electron payload via electron-builder extraResources at v0.5+.
+#
+# Triggers:
+#   * push to master (CI verifies the spec stays buildable)
+#   * pull_request to master (gate breaking changes)
+#   * workflow_dispatch (manual; pulls a fresh artifact on demand)
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - "**/*.md"
+      - "tui/**"
+      - "extension/**"
+  pull_request:
+    branches: [master]
+    paths-ignore:
+      - "**/*.md"
+      - "tui/**"
+      - "extension/**"
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: cothink-serve-windows-x64
+            binary_name: cothink-serve.exe
+          - os: ubuntu-latest
+            artifact_name: cothink-serve-linux-x64
+            binary_name: cothink-serve
+          - os: macos-15
+            artifact_name: cothink-serve-macos-arm64
+            binary_name: cothink-serve
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: "pyproject.toml"
+
+      - name: Install build deps
+        # Upgrade pip first to ensure PEP 621 [project.optional-dependencies]
+        # resolution works. Install the package editable so PyInstaller's
+        # collect_submodules() can walk cothink/* at spec-eval time.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[build]"
+
+      - name: Run PyInstaller
+        run: pyinstaller cothink-serve.spec --clean --noconfirm
+
+      - name: Show output (sanity check)
+        shell: bash
+        run: |
+          ls -la dist/
+          file dist/${{ matrix.binary_name }} 2>/dev/null || true
+          du -h dist/${{ matrix.binary_name }} 2>/dev/null || true
+
+      - name: Smoke-test — /health endpoint
+        # Launch the binary, poll /health for up to 30s, kill it. Confirms
+        # the bundled binary boots, imports clean, and answers HTTP.
+        # Test runs without API keys, so endpoints needing live model calls
+        # would fail; /health only reports liveness + configured models.
+        shell: bash
+        run: |
+          ./dist/${{ matrix.binary_name }} --host 127.0.0.1 --port 8765 &
+          SERVER_PID=$!
+          echo "spawned PID=$SERVER_PID"
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8765/health > /tmp/health.json 2>/dev/null; then
+              echo "/health responded:"
+              cat /tmp/health.json
+              kill $SERVER_PID 2>/dev/null || true
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "ERROR: /health did not respond within 30s" >&2
+          kill -9 $SERVER_PID 2>/dev/null || true
+          exit 1
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/${{ matrix.binary_name }}
+          retention-days: 7
+        if: always() && hashFiles(format('dist/{0}', matrix.binary_name)) != ''
