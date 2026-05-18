@@ -60,6 +60,12 @@ from .state import CothinkState, LearningEntry
 # Mirror cli.py's package-root resolution for .env discovery.
 _PACKAGE_ROOT = Path(__file__).resolve().parent.parent.parent
 
+# Tracks which API keys are missing at server startup so /health can report
+# readiness state instead of the server crashing out. Endpoints that need a
+# specific key (e.g. /build needs GEMINI_API_KEY) check this list and return
+# HTTP 503 with a structured error rather than exploding mid-stream.
+MISSING_API_KEYS: list[str] = []
+
 
 # ---------------------------------------------------------------------------
 # Request/response schemas
@@ -154,8 +160,17 @@ def _create_app() -> FastAPI:
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
+        """Liveness + readiness probe.
+
+        `ok` = server is up and HTTP routing works.
+        `ready` = all required API keys are present and dual-brain endpoints
+                  (/build, /chat) can actually run. False means the extension
+                  should surface a 'set API key' prompt in the status bar.
+        """
         return {
             "ok": True,
+            "ready": len(MISSING_API_KEYS) == 0,
+            "missing_api_keys": list(MISSING_API_KEYS),
             "claude_model": CLAUDE_MODEL,
             "gemini_model": GEMINI_MODEL,
             "flash_model": GEMINI_FLASH_MODEL,
@@ -180,6 +195,15 @@ def _create_app() -> FastAPI:
 
     @app.post("/build")
     async def build(req: BuildRequest) -> EventSourceResponse:
+        if MISSING_API_KEYS:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "cothink server is not ready",
+                    "missing_api_keys": list(MISSING_API_KEYS),
+                    "hint": "Set GEMINI_API_KEY via the extension's `cothink: Set API Key` command, then restart the server.",
+                },
+            )
         resolved = str(Path(req.project_dir).resolve())
         if not Path(resolved).exists():
             raise HTTPException(status_code=400, detail=f"project_dir not found: {resolved}")
@@ -207,6 +231,15 @@ def _create_app() -> FastAPI:
 
     @app.post("/chat")
     async def chat(req: ChatRequest) -> EventSourceResponse:
+        if MISSING_API_KEYS:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "cothink server is not ready",
+                    "missing_api_keys": list(MISSING_API_KEYS),
+                    "hint": "Set GEMINI_API_KEY via the extension's `cothink: Set API Key` command, then restart the server.",
+                },
+            )
         resolved = str(Path(req.project_dir).resolve())
         if not Path(resolved).exists():
             raise HTTPException(status_code=400, detail=f"project_dir not found: {resolved}")
@@ -615,6 +648,9 @@ def _compress_history_inline(
 
 
 def _load_env() -> None:
+    """Load env vars + populate MISSING_API_KEYS. Non-fatal on missing keys —
+    server still boots so the extension can surface a 'set API key' prompt in
+    its status bar instead of seeing the sidecar crash unrecoverably."""
     env_path = _PACKAGE_ROOT / ".env"
     if env_path.exists():
         load_dotenv(env_path)
@@ -622,12 +658,13 @@ def _load_env() -> None:
         load_dotenv()
     # Mirror cli.py: force Claude calls through claude-agent-sdk's subscription auth.
     os.environ.pop("ANTHROPIC_API_KEY", None)
+    MISSING_API_KEYS.clear()
     if not os.environ.get("GEMINI_API_KEY"):
+        MISSING_API_KEYS.append("GEMINI_API_KEY")
         sys.stderr.write(
-            "cothink server: missing env var GEMINI_API_KEY. "
-            "Set it in cothink/.env before starting the server.\n"
+            "cothink server: warning — GEMINI_API_KEY not set. /build and /chat "
+            "will return 503 until it's provided. /health will report this.\n"
         )
-        sys.exit(2)
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8765) -> None:

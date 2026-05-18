@@ -47,7 +47,14 @@ interface Mention {
  * summary line. Reset truncates.
  */
 export class WorkbenchPanelProvider implements vscode.WebviewViewProvider {
-  private view: vscode.WebviewView | undefined;
+  // v0.6 — accept both shapes.  Sidebar registration calls resolveWebviewView()
+  // with a WebviewView; the cothink.openComposer command calls bindEditorPanel()
+  // with a WebviewPanel.  Both share .webview and .onDidDispose, so the
+  // _bind() helper works against either.
+  private view:
+    | vscode.WebviewView
+    | vscode.WebviewPanel
+    | undefined;
   private activeAbort: AbortController | undefined;
   private statusInterval: NodeJS.Timeout | undefined;
   private history: unknown[] = [];
@@ -58,11 +65,34 @@ export class WorkbenchPanelProvider implements vscode.WebviewViewProvider {
     private readonly getServerPort: () => number,
   ) {}
 
+  /** WebviewViewProvider entry — fires when the user opens the sidebar view. */
   resolveWebviewView(view: vscode.WebviewView): void {
-    this.view = view;
-    view.webview.options = { enableScripts: true };
-    view.webview.html = this.html();
-    view.webview.onDidReceiveMessage((msg) => this.handleMessage(msg));
+    this._bind(view);
+  }
+
+  /** Editor-area entry — called from the cothink.openComposer command.
+   *  Caller is responsible for creating the WebviewPanel with the right
+   *  options (enableScripts, retainContextWhenHidden); we still set
+   *  webview.options here so the path matches the sidebar exactly. */
+  bindEditorPanel(panel: vscode.WebviewPanel): void {
+    this._bind(panel);
+  }
+
+  /** Shared binding flow used by both entry points.  Sets up HTML, message
+   *  bridge, status-polling interval, and disposal cleanup against any
+   *  webview host (WebviewView | WebviewPanel). */
+  private _bind(host: vscode.WebviewView | vscode.WebviewPanel): void {
+    // If a prior webview was bound (e.g. sidebar still open and user invoked
+    // openComposer in the editor), tear its interval down — the new host
+    // takes over status posting.
+    if (this.statusInterval) {
+      clearInterval(this.statusInterval);
+      this.statusInterval = undefined;
+    }
+    this.view = host;
+    host.webview.options = { enableScripts: true };
+    host.webview.html = this.html();
+    host.webview.onDidReceiveMessage((msg) => this.handleMessage(msg));
 
     this.statusInterval = setInterval(() => {
       this.post({ type: "status", health: this.getHealth() ?? "unknown" });
@@ -72,10 +102,12 @@ export class WorkbenchPanelProvider implements vscode.WebviewViewProvider {
       console.error("[cothink] workbench loadSession failed:", e),
     );
 
-    view.onDidDispose(() => {
+    host.onDidDispose(() => {
       if (this.statusInterval) clearInterval(this.statusInterval);
       this.activeAbort?.abort();
-      this.view = undefined;
+      // Only clear view if THIS host is still the active one (avoid races
+      // when the user closes the sidebar after switching to the editor).
+      if (this.view === host) this.view = undefined;
     });
   }
 
@@ -472,11 +504,31 @@ export class WorkbenchPanelProvider implements vscode.WebviewViewProvider {
       flex: 1; overflow-y: auto; padding: 10px; display: flex;
       flex-direction: column; gap: 14px;
     }
+    /* v0.6 branded splash — shown when the conversation log is empty. The
+       dual-hemisphere SVG mark sits above the cothink wordmark + tagline.
+       :first-line larger renders the "cothink" word bolder than the rest. */
     #log:empty::before {
-      content: "Workbench: type a question or a build task. Both Claude and Gemini reason on every message — Discovery + Planning run automatically; Executing fires only when files actually need writing.";
+      content: "cothink\Adual-brain · Claude Opus 4.7 ⟷ Gemini 3.1 Pro\A\Atype a question or build task — Discovery + Planning run automatically";
+      display: block;
+      white-space: pre;
       color: var(--vscode-descriptionForeground);
-      font-style: italic; text-align: center; max-width: 320px;
-      margin: 60px auto; padding: 0 8px;
+      text-align: center;
+      max-width: 460px;
+      margin: 60px auto 0 auto;
+      padding: 120px 8px 0 8px;
+      font-size: 13px;
+      line-height: 1.7;
+      letter-spacing: 0.2px;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' width='100' height='100'><circle cx='38' cy='50' r='22' fill='%237adcc8' opacity='0.9'/><circle cx='62' cy='50' r='22' fill='%23d7a8d1' opacity='0.9'/></svg>");
+      background-repeat: no-repeat;
+      background-position: top center;
+      background-size: 100px 100px;
+    }
+    #log:empty::first-line {
+      font-size: 28px;
+      font-weight: 300;
+      letter-spacing: 0.5px;
+      color: var(--vscode-foreground);
     }
 
     .user-msg {

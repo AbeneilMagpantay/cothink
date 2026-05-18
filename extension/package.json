@@ -30,7 +30,34 @@
     "commands": [
       { "command": "cothink.startServer", "title": "cothink: Start Server" },
       { "command": "cothink.stopServer", "title": "cothink: Stop Server" },
-      { "command": "cothink.restartServer", "title": "cothink: Restart Server" }
+      { "command": "cothink.restartServer", "title": "cothink: Restart Server" },
+      { "command": "cothink.setApiKey", "title": "cothink: Set API Key" },
+      { "command": "cothink.openComposer", "title": "cothink: Open Composer" }
+    ],
+    "themes": [
+      {
+        "label": "cothink Dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/cothink-dark.json"
+      },
+      {
+        "label": "cothink Light",
+        "uiTheme": "vs",
+        "path": "./themes/cothink-light.json"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "cothink.openComposer",
+        "key": "ctrl+l",
+        "mac": "cmd+l",
+        "when": "!editorTextFocus"
+      },
+      {
+        "command": "workbench.action.toggleActivityBarVisibility",
+        "key": "ctrl+shift+b",
+        "mac": "cmd+shift+b"
+      }
     ],
     "configuration": {
       "title": "cothink",

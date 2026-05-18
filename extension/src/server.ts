@@ -9,6 +9,7 @@ const HEALTH_POLL_INTERVAL_MS = 500;
 export type HealthState =
   | "starting"
   | "connected"
+  | "needs api key"
   | "stopped"
   | "unreachable"
   | "error: no python"
@@ -24,8 +25,13 @@ export class CothinkServer {
   private process: cp.ChildProcess | undefined;
   private statusBar: vscode.StatusBarItem;
   public healthState: HealthState = "stopped";
+  /** Track which keys were reported as missing by /health so the
+   *  setApiKey command knows which to prompt for. */
+  public missingApiKeys: string[] = [];
+  private readonly context: vscode.ExtensionContext;
 
   constructor(context: vscode.ExtensionContext) {
+    this.context = context;
     this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     this.statusBar.command = "cothink.restartServer";
     this.statusBar.tooltip = "Click to restart the cothink server";
@@ -44,6 +50,11 @@ export class CothinkServer {
     const port = config.get<number>("serverPort", 8765);
     this.setState("starting");
 
+    // Pull stored API keys from context.secrets and merge into the child
+    // process env so the sidecar's _load_env() picks them up.  setApiKey
+    // command stores keys here when the user supplies them.
+    const spawnEnv = await this.buildSpawnEnv();
+
     // Bundled-mode first: the cothink fork ships a standalone cothink-serve
     // binary at process.resourcesPath via electron-builder extraResources.
     // When that exists, prefer it over the dev-mode Python-interpreter path
@@ -55,7 +66,7 @@ export class CothinkServer {
         ["--host", "127.0.0.1", "--port", String(port)],
         {
           stdio: ["ignore", "pipe", "pipe"],
-          env: { ...process.env },
+          env: spawnEnv,
           windowsHide: true,
         },
       );
@@ -89,7 +100,7 @@ export class CothinkServer {
         {
           cwd: cothinkRoot,
           stdio: ["ignore", "pipe", "pipe"],
-          env: { ...process.env },
+          env: spawnEnv,
           windowsHide: true,
         },
       );
@@ -113,13 +124,21 @@ export class CothinkServer {
       this.setState("unreachable");
     });
 
-    const healthy = await this.waitForHealthy(port);
-    this.setState(healthy ? "connected" : "unreachable");
-    if (!healthy) {
+    const probe = await this.waitForHealthy(port);
+    if (!probe.reachable) {
+      this.setState("unreachable");
       vscode.window.showErrorMessage(
         `cothink: server failed to respond on /health within ${HEALTH_TIMEOUT_MS / 1000}s. ` +
           "Check the developer console (Help → Toggle Developer Tools) for stdout/stderr.",
       );
+      return;
+    }
+    if (probe.ready) {
+      this.missingApiKeys = [];
+      this.setState("connected");
+    } else {
+      this.missingApiKeys = probe.missingApiKeys;
+      this.setState("needs api key");
     }
   }
 
@@ -155,20 +174,50 @@ export class CothinkServer {
     switch (state) {
       case "connected":
         this.statusBar.text = "$(check) cothink";
+        this.statusBar.command = "cothink.restartServer";
+        this.statusBar.tooltip = "Click to restart the cothink server";
+        break;
+      case "needs api key":
+        this.statusBar.text = "$(warning) cothink: set API key";
+        this.statusBar.command = "cothink.setApiKey";
+        this.statusBar.tooltip = `Click to set ${this.missingApiKeys.join(", ")}`;
         break;
       case "starting":
         this.statusBar.text = "$(loading~spin) cothink: starting";
+        this.statusBar.command = "cothink.restartServer";
         break;
       case "stopped":
         this.statusBar.text = "$(circle-slash) cothink: stopped";
+        this.statusBar.command = "cothink.restartServer";
         break;
       case "unreachable":
         this.statusBar.text = "$(error) cothink: unreachable";
+        this.statusBar.command = "cothink.restartServer";
         break;
       default:
         this.statusBar.text = `$(error) cothink: ${state.replace("error: ", "")}`;
+        this.statusBar.command = "cothink.restartServer";
         break;
     }
+  }
+
+  /** Merge stored API-key secrets into a copy of process.env so the spawned
+   *  sidecar reads them via _load_env().  We deliberately remove
+   *  ELECTRON_RUN_AS_NODE — when the extension host runs inside the cothink
+   *  Electron app, that var is set, and inheriting it makes cothink-serve
+   *  boot as a Node interpreter (no FastAPI, no /health). */
+  private async buildSpawnEnv(): Promise<NodeJS.ProcessEnv> {
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.ELECTRON_RUN_AS_NODE;
+    const gemini = await this.context.secrets.get("cothink.geminiApiKey");
+    if (gemini) {
+      env.GEMINI_API_KEY = gemini;
+    }
+    const anthropic = await this.context.secrets.get("cothink.anthropicApiKey");
+    if (anthropic) {
+      env.ANTHROPIC_API_KEY = anthropic;
+    }
+    return env;
   }
 
   /** Resolve the standalone cothink-serve binary if the cothink fork bundled it.
@@ -222,17 +271,30 @@ export class CothinkServer {
     return "";
   }
 
-  private async waitForHealthy(port: number): Promise<boolean> {
+  private async waitForHealthy(
+    port: number,
+  ): Promise<{ reachable: boolean; ready: boolean; missingApiKeys: string[] }> {
     const deadline = Date.now() + HEALTH_TIMEOUT_MS;
     while (Date.now() < deadline) {
       try {
         const resp = await fetch(`http://127.0.0.1:${port}/health`);
-        if (resp.ok) return true;
+        if (resp.ok) {
+          const body = (await resp.json()) as {
+            ok?: boolean;
+            ready?: boolean;
+            missing_api_keys?: string[];
+          };
+          return {
+            reachable: true,
+            ready: body.ready === true,
+            missingApiKeys: body.missing_api_keys ?? [],
+          };
+        }
       } catch {
         // server still booting; ignore and retry
       }
       await new Promise((r) => setTimeout(r, HEALTH_POLL_INTERVAL_MS));
     }
-    return false;
+    return { reachable: false, ready: false, missingApiKeys: [] };
   }
 }
