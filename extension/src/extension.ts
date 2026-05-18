@@ -103,48 +103,39 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 }
 
 /** First-run layout: only fires on the very first activation per install.
- *  After this runs, the extension is dormant about defaults — user is free
- *  to re-show the activity bar, switch themes, etc., and we won't override.
  *
- *  v0.8: most of the heavy lifting happens via product.json's
- *  configurationDefaults (baked into the fork at build time, applied by
- *  VSCode BEFORE any UI renders).  This extension flow is belt-and-
- *  suspenders cleanup: fires aggressive close commands on a multi-retry
- *  schedule so anything VSCode opened during startup gets killed.
+ *  v0.8: the heavy lifting is now in the FORK at the CSS level — chrome
+ *  (menubar, tab strip, sidebar, panel, auxiliary, breadcrumbs) is hidden
+ *  via display:none injected into vscode/src/vs/workbench/browser/style.css
+ *  by prepare_vscode.sh.  No flicker, no race, no retry loop.
+ *
+ *  This extension flow remains as a small "open the composer in editor
+ *  area on first launch" trigger so users see the chat immediately.  Plus
+ *  belt-and-suspenders config.update for users whose profiles predate the
+ *  fork's configurationDefaults.
  */
 async function applyFirstRunLayoutOnce(
   context: vscode.ExtensionContext,
 ): Promise<void> {
-  // Bumped key in v0.8 so existing installs re-run with the new commands.
   const FIRST_RUN_KEY = "cothink.firstRun.v0_8.completed";
   if (context.globalState.get<boolean>(FIRST_RUN_KEY)) return;
 
-  const cfg = vscode.workspace.getConfiguration();
   // Belt-and-suspenders: same keys as product.json configurationDefaults
   // applied at the user-settings layer for profiles that predate v0.8.
+  // (Fresh installs of v0.8 get these via configurationDefaults; this
+  //  covers users coming from v0.5/v0.6/v0.7 who already have a profile.)
+  const cfg = vscode.workspace.getConfiguration();
   await cfg.update("workbench.startupEditor", "none", vscode.ConfigurationTarget.Global);
   await cfg.update("workbench.activityBar.location", "hidden", vscode.ConfigurationTarget.Global);
   await cfg.update("workbench.editor.showTabs", "none", vscode.ConfigurationTarget.Global);
-  await cfg.update("workbench.layoutControl.enabled", false, vscode.ConfigurationTarget.Global);
-  await cfg.update("window.menuBarVisibility", "compact", vscode.ConfigurationTarget.Global);
-  await cfg.update("window.commandCenter", false, vscode.ConfigurationTarget.Global);
-  await cfg.update("breadcrumbs.enabled", false, vscode.ConfigurationTarget.Global);
   await cfg.update("workbench.colorTheme", "cothink Dark", vscode.ConfigurationTarget.Global);
 
-  // Aggressive retry loop: VSCode may open the welcome editor, restore
-  // the sidebar, or render auxiliary bar AFTER our activation completes.
-  // Fire close-and-reshape at 0/500/1500/3000/5000ms so we catch every
-  // post-activate UI element that VSCode opens during startup.
-  const tryReshape = async () => {
-    try { await vscode.commands.executeCommand("workbench.action.closeAllEditors"); } catch {}
-    try { await vscode.commands.executeCommand("workbench.action.closeSidebar"); } catch {}
-    try { await vscode.commands.executeCommand("workbench.action.closeAuxiliaryBar"); } catch {}
-    try { await vscode.commands.executeCommand("workbench.action.closePanel"); } catch {}
-    try { await vscode.commands.executeCommand("cothink.openComposer"); } catch {}
-  };
-  await tryReshape();
-  for (const delay of [500, 1500, 3000, 5000]) {
-    setTimeout(() => { tryReshape().catch(() => {}); }, delay);
+  // Open the composer in the editor area on first launch — this is the
+  // user's "AI IDE first impression."  The CSS does the rest.
+  try {
+    await vscode.commands.executeCommand("cothink.openComposer");
+  } catch {
+    // ignore
   }
 
   await context.globalState.update(FIRST_RUN_KEY, true);
