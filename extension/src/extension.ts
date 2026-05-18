@@ -104,54 +104,86 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 /** First-run layout: only fires on the very first activation per install.
  *  After this runs, the extension is dormant about defaults — user is free
- *  to re-show the activity bar, switch themes, etc., and we won't override. */
+ *  to re-show the activity bar, switch themes, etc., and we won't override.
+ *
+ *  v0.7: most of the heavy lifting now happens via product.json's
+ *  configurationDefaults (baked into the fork at build time, applied by
+ *  VSCode BEFORE the welcome page renders).  This extension flow remains
+ *  as a belt-and-suspenders cleanup: it fires the imperative close
+ *  commands on a delayed retry loop so any welcome editor VSCode managed
+ *  to open between defaults-load and our activation gets closed.
+ */
 async function applyFirstRunLayoutOnce(
   context: vscode.ExtensionContext,
 ): Promise<void> {
-  const FIRST_RUN_KEY = "cothink.firstRun.completed";
+  // Bumped the version suffix in v0.7 so existing v0.6 users re-run the
+  // flow with the new (correct) commands.
+  const FIRST_RUN_KEY = "cothink.firstRun.v0_7.completed";
   if (context.globalState.get<boolean>(FIRST_RUN_KEY)) return;
 
   const cfg = vscode.workspace.getConfiguration();
-  // Hide VSCode's default welcome page so the next launch goes straight to
-  // the composer.
+  // Belt-and-suspenders: same as product.json configurationDefaults, but
+  // applied via user-settings layer in case the user's profile pre-existed
+  // before v0.7 and the defaults aren't picked up.
   await cfg.update(
     "workbench.startupEditor",
     "none",
     vscode.ConfigurationTarget.Global,
   );
-  // Tuck the activity bar out of sight; Ctrl+Shift+B (added later) toggles
-  // it back when the user wants the file explorer.
   await cfg.update(
     "workbench.activityBar.location",
     "hidden",
     vscode.ConfigurationTarget.Global,
   );
-  // cothink-branded dark theme as the default.
   await cfg.update(
     "workbench.colorTheme",
     "cothink Dark",
     vscode.ConfigurationTarget.Global,
   );
 
-  // Close any auto-opened welcome editors so the composer takes the whole
-  // editor area cleanly.
-  try {
-    await vscode.commands.executeCommand("workbench.action.closeAllEditors");
-  } catch {
-    // ignore
-  }
-  // Hide the sidebar visually (workbench.sideBar.visible isn't a real
-  // settings key on most VSCode versions; the imperative command is more
-  // reliable).
-  try {
-    await vscode.commands.executeCommand(
-      "workbench.action.closeSidebar",
-    );
-  } catch {
-    // ignore
-  }
-  // Open the composer in the editor area.
-  await vscode.commands.executeCommand("cothink.openComposer");
+  // Retry-loop: VSCode may open its welcome editor AFTER our activation
+  // runs (race condition on onStartupFinished).  Fire close-and-open on
+  // a short delayed schedule so we catch any post-activate UI.
+  const tryReshape = async () => {
+    try {
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+    } catch {
+      // ignore
+    }
+    // Correct command: toggleSidebarVisibility targets the PRIMARY sidebar
+    // (the Explorer pane).  closeSidebar targets only the auxiliary bar.
+    // Only toggle if the sidebar is currently visible (the focus context
+    // key sideBarVisible is true).
+    try {
+      const sideBarVisible = await vscode.commands
+        .executeCommand<boolean>("getContextKeyValue", "sideBarVisible")
+        .then(
+          (v) => v !== false,
+          () => true, // assume visible if context-key lookup unavailable
+        );
+      if (sideBarVisible) {
+        await vscode.commands.executeCommand(
+          "workbench.action.toggleSidebarVisibility",
+        );
+      }
+    } catch {
+      // ignore
+    }
+    try {
+      await vscode.commands.executeCommand("cothink.openComposer");
+    } catch {
+      // ignore
+    }
+  };
+  // Fire once immediately, then again after 800ms + 2000ms to catch any
+  // welcome editor VSCode opens after the initial sweep.
+  await tryReshape();
+  setTimeout(() => {
+    tryReshape().catch(() => {});
+  }, 800);
+  setTimeout(() => {
+    tryReshape().catch(() => {});
+  }, 2000);
 
   await context.globalState.update(FIRST_RUN_KEY, true);
 }
