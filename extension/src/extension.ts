@@ -106,84 +106,46 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
  *  After this runs, the extension is dormant about defaults — user is free
  *  to re-show the activity bar, switch themes, etc., and we won't override.
  *
- *  v0.7: most of the heavy lifting now happens via product.json's
+ *  v0.8: most of the heavy lifting happens via product.json's
  *  configurationDefaults (baked into the fork at build time, applied by
- *  VSCode BEFORE the welcome page renders).  This extension flow remains
- *  as a belt-and-suspenders cleanup: it fires the imperative close
- *  commands on a delayed retry loop so any welcome editor VSCode managed
- *  to open between defaults-load and our activation gets closed.
+ *  VSCode BEFORE any UI renders).  This extension flow is belt-and-
+ *  suspenders cleanup: fires aggressive close commands on a multi-retry
+ *  schedule so anything VSCode opened during startup gets killed.
  */
 async function applyFirstRunLayoutOnce(
   context: vscode.ExtensionContext,
 ): Promise<void> {
-  // Bumped the version suffix in v0.7 so existing v0.6 users re-run the
-  // flow with the new (correct) commands.
-  const FIRST_RUN_KEY = "cothink.firstRun.v0_7.completed";
+  // Bumped key in v0.8 so existing installs re-run with the new commands.
+  const FIRST_RUN_KEY = "cothink.firstRun.v0_8.completed";
   if (context.globalState.get<boolean>(FIRST_RUN_KEY)) return;
 
   const cfg = vscode.workspace.getConfiguration();
-  // Belt-and-suspenders: same as product.json configurationDefaults, but
-  // applied via user-settings layer in case the user's profile pre-existed
-  // before v0.7 and the defaults aren't picked up.
-  await cfg.update(
-    "workbench.startupEditor",
-    "none",
-    vscode.ConfigurationTarget.Global,
-  );
-  await cfg.update(
-    "workbench.activityBar.location",
-    "hidden",
-    vscode.ConfigurationTarget.Global,
-  );
-  await cfg.update(
-    "workbench.colorTheme",
-    "cothink Dark",
-    vscode.ConfigurationTarget.Global,
-  );
+  // Belt-and-suspenders: same keys as product.json configurationDefaults
+  // applied at the user-settings layer for profiles that predate v0.8.
+  await cfg.update("workbench.startupEditor", "none", vscode.ConfigurationTarget.Global);
+  await cfg.update("workbench.activityBar.location", "hidden", vscode.ConfigurationTarget.Global);
+  await cfg.update("workbench.editor.showTabs", "none", vscode.ConfigurationTarget.Global);
+  await cfg.update("workbench.layoutControl.enabled", false, vscode.ConfigurationTarget.Global);
+  await cfg.update("window.menuBarVisibility", "compact", vscode.ConfigurationTarget.Global);
+  await cfg.update("window.commandCenter", false, vscode.ConfigurationTarget.Global);
+  await cfg.update("breadcrumbs.enabled", false, vscode.ConfigurationTarget.Global);
+  await cfg.update("workbench.colorTheme", "cothink Dark", vscode.ConfigurationTarget.Global);
 
-  // Retry-loop: VSCode may open its welcome editor AFTER our activation
-  // runs (race condition on onStartupFinished).  Fire close-and-open on
-  // a short delayed schedule so we catch any post-activate UI.
+  // Aggressive retry loop: VSCode may open the welcome editor, restore
+  // the sidebar, or render auxiliary bar AFTER our activation completes.
+  // Fire close-and-reshape at 0/500/1500/3000/5000ms so we catch every
+  // post-activate UI element that VSCode opens during startup.
   const tryReshape = async () => {
-    try {
-      await vscode.commands.executeCommand("workbench.action.closeAllEditors");
-    } catch {
-      // ignore
-    }
-    // Correct command: toggleSidebarVisibility targets the PRIMARY sidebar
-    // (the Explorer pane).  closeSidebar targets only the auxiliary bar.
-    // Only toggle if the sidebar is currently visible (the focus context
-    // key sideBarVisible is true).
-    try {
-      const sideBarVisible = await vscode.commands
-        .executeCommand<boolean>("getContextKeyValue", "sideBarVisible")
-        .then(
-          (v) => v !== false,
-          () => true, // assume visible if context-key lookup unavailable
-        );
-      if (sideBarVisible) {
-        await vscode.commands.executeCommand(
-          "workbench.action.toggleSidebarVisibility",
-        );
-      }
-    } catch {
-      // ignore
-    }
-    try {
-      await vscode.commands.executeCommand("cothink.openComposer");
-    } catch {
-      // ignore
-    }
+    try { await vscode.commands.executeCommand("workbench.action.closeAllEditors"); } catch {}
+    try { await vscode.commands.executeCommand("workbench.action.closeSidebar"); } catch {}
+    try { await vscode.commands.executeCommand("workbench.action.closeAuxiliaryBar"); } catch {}
+    try { await vscode.commands.executeCommand("workbench.action.closePanel"); } catch {}
+    try { await vscode.commands.executeCommand("cothink.openComposer"); } catch {}
   };
-  // Fire once immediately, then again after 800ms + 2000ms to catch any
-  // welcome editor VSCode opens after the initial sweep.
   await tryReshape();
-  setTimeout(() => {
-    tryReshape().catch(() => {});
-  }, 800);
-  setTimeout(() => {
-    tryReshape().catch(() => {});
-  }, 2000);
+  for (const delay of [500, 1500, 3000, 5000]) {
+    setTimeout(() => { tryReshape().catch(() => {}); }, delay);
+  }
 
   await context.globalState.update(FIRST_RUN_KEY, true);
 }
