@@ -184,8 +184,14 @@ export class CothinkServer {
     // In sideload-into-Antigravity mode, process.resourcesPath points at
     // Antigravity's own resources dir, where cothink-serve.exe doesn't exist
     // — so we return undefined and fall back to the Python path.
+    //
+    // resourcesPath is injected by Electron at runtime and not in @types/node;
+    // cast through unknown to access it without polluting global types.
+    const resourcesPath = (process as unknown as { resourcesPath?: string })
+      .resourcesPath;
+    if (!resourcesPath) return undefined;
     const ext = process.platform === "win32" ? ".exe" : "";
-    const bundled = path.join(process.resourcesPath, `cothink-serve${ext}`);
+    const bundled = path.join(resourcesPath, `cothink-serve${ext}`);
     if (fs.existsSync(bundled)) return bundled;
     return undefined;
   }
