@@ -1,0 +1,76 @@
+name: Build cothink VSCode extension
+
+# Compiles the extension TypeScript and packages the minimum runtime layout
+# (package.json + out/ + media/ + themes/ + README.md) as a tarball.  The
+# cothink-build fork's prepare_vscode.sh fetches this tarball and extracts
+# it into vscode/extensions/cothink/ before the gulp build runs, so the
+# fork ships the extension as a built-in (no sideload required at v0.5+).
+#
+# Triggers:
+#   * push to master that touches extension/ or pyproject.toml
+#   * pull_request that touches extension/
+#   * workflow_dispatch
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "extension/**"
+      - "pyproject.toml"
+      - ".github/workflows/build-extension.yml"
+  pull_request:
+    branches: [master]
+    paths:
+      - "extension/**"
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+
+      - name: Install + compile
+        # The extension has only devDependencies (typescript + types) — no
+        # runtime npm deps to bundle.  npm install for dev compilation, then
+        # tsc emits out/*.js from src/*.ts.
+        working-directory: extension
+        run: |
+          npm install
+          npm run compile
+          ls -la out/
+
+      - name: Package runtime layout
+        # Tar up only what the built-in extension needs at runtime:
+        #   package.json   — VSCode reads this to register commands/views
+        #   out/           — compiled JS
+        #   media/         — icons, images
+        #   themes/        — color themes (if any)
+        #   README.md      — shown on the extension's marketplace page
+        # Exclude src/, node_modules/, .vscode/, *.vsix, *.ts (raw sources).
+        run: |
+          mkdir -p staging/cothink
+          cp extension/package.json staging/cothink/
+          cp -r extension/out staging/cothink/
+          cp -r extension/media staging/cothink/ 2>/dev/null || true
+          cp -r extension/themes staging/cothink/ 2>/dev/null || true
+          cp extension/README.md staging/cothink/ 2>/dev/null || true
+          tar -czf cothink-extension.tar.gz -C staging cothink
+          du -h cothink-extension.tar.gz
+          tar -tzf cothink-extension.tar.gz | head -30
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cothink-extension
+          path: cothink-extension.tar.gz
+          retention-days: 7
